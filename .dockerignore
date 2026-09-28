@@ -1,0 +1,26 @@
+# Keep the build context small and free of local state.
+.git
+.gitignore
+.github
+.env
+.env.*
+!.env.example
+
+# Build output and coverage reports are generated, never sources.
+bin/
+dist/
+coverage.out
+*.test
+*.out
+
+# Local editor and OS noise.
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Documentation is not needed to compile the binary.
+specs/
+*.md
+!go.mod
+!go.sum

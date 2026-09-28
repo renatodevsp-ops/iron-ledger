@@ -1,0 +1,6 @@
+/speckit.specify Implementar um serviço backend em Go para processamento distribuído de apostas. 
+O sistema deve expor uma API HTTP e um consumidor de mensagens (SQS) que movimentem carteiras 
+de jogadores com garantias equivalentes. As operações financeiras externas suportadas são 
+BET, WIN, LOSS, REFUND e ROLLBACK. O resultado financeiro deve permanecer correto com 
+múltiplas instâncias em execução e falhas entre as etapas do processamento, garantindo 
+idempotência persistente, integridade do ledger e ausência de saldo negativo.
