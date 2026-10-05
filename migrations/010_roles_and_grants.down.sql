@@ -1,4 +1,0 @@
--- 010_roles_and_grants.down.sql
--- The roles are intentionally left in place: dropping a role that another
--- deployment still grants to is a shared-state change, and the grants it made
--- disappear with the tables this teardown drops.
