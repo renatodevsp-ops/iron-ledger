@@ -1,0 +1,162 @@
+# Local environment for the whole platform: PostgreSQL, LocalStack for SQS and
+# Keycloak, plus the two application processes.
+#
+#   docker compose up --build
+#
+# Nothing here is a stub: the application verifies tokens against the real
+# Keycloak, publishes to and consumes from the real SQS semantics LocalStack
+# implements, and stores money in the real PostgreSQL.
+
+name: iron-ledger
+
+x-app-environment: &app-environment
+  IRONLEDGER_ENV: local
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DATABASE_URL: postgres://iron:iron@postgres:5432/ironledger?sslmode=disable
+  DATABASE_MAX_CONNS: "10"
+  DATABASE_MIGRATE_ON_BOOT: "false"
+  MIGRATIONS_DIR: /app/migrations
+  SQS_ENDPOINT: http://localstack:4566
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  SQS_VISIBILITY_TIMEOUT: 30s
+  SQS_WAIT_TIME: 2s
+  SQS_MAX_ATTEMPTS: "5"
+  AUTH_ENABLED: "true"
+  OIDC_ISSUER_URL: http://keycloak:8080/realms/ironledger
+  OIDC_AUDIENCE: iron-ledger-api
+  AUTH_INTERNAL_CLIENT_ID: iron-ledger-internal
+  AUTH_INTERNAL_ROLE: internal
+  AUTH_CLIENT_PROVIDERS: provider-a=provider-a,provider-b=provider-b
+  WAGERING_REFERENCE_BACKOFF_BASE: 2s
+  WAGERING_PENDING_RESUME_INTERVAL: 5s
+  OUTBOX_POLL_INTERVAL: 250ms
+  HTTP_READ_TIMEOUT: 10s
+  HTTP_WRITE_TIMEOUT: 15s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: iron
+      POSTGRES_PASSWORD: iron
+      POSTGRES_DB: ironledger
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # The application must not start against a database that is not ready to
+      # answer, so readiness is a real query rather than a port check.
+      test: ["CMD-SHELL", "pg_isready -U iron -d ironledger"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: sqs
+      DEFAULT_REGION: us-east-1
+      # Kept in memory: a broker queue that outlives the container would keep
+      # delivering messages to instances that no longer exist.
+      PERSISTENCE: "0"
+    ports:
+      - "${LOCALSTACK_PORT:-4566}:4566"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4566/_localstack/health | grep -q '\"sqs\"'"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    command: ["start", "--import-realm", "--http-enabled=true", "--http-port=8080"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      # The realm is served over plain HTTP inside the compose network, which is
+      # fine for a local environment and would not be in production.
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ./deploy/keycloak/realm-ironledger.json:/opt/keycloak/data/import/realm-ironledger.json:ro
+    ports:
+      - "${KEYCLOAK_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e 'GET /realms/ironledger HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | head -1 | grep 200"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    restart: unless-stopped
+
+  # Migrations run once, as their own job, before the application processes
+  # start. Several instances racing to migrate would only add noise.
+  migrate:
+    build:
+      context: .
+      target: runtime
+    entrypoint: ["/app/migrate"]
+    command: ["up"]
+    environment:
+      <<: *app-environment
+      DATABASE_URL: postgres://iron:iron@postgres:5432/ironledger?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      target: runtime
+    environment:
+      <<: *app-environment
+      HTTP_ADDRESS: :8080
+      INSTANCE_ID: ${API_INSTANCE_ID:-api-1}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/app/api", "-healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      target: runtime
+    entrypoint: ["/app/worker"]
+    environment:
+      <<: *app-environment
+      HTTP_ADDRESS: :8080
+      INSTANCE_ID: ${WORKER_INSTANCE_ID:-worker-1}
+    ports:
+      - "${WORKER_PORT:-8082}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

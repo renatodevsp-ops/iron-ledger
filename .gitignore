@@ -1,0 +1,15 @@
+# Build output
+/bin/
+/dist/
+
+# Local run artefacts: logs, pid files, scratch environment files
+/.run/
+
+# Local configuration: .env holds machine-specific values; .env.example is the
+# checked-in template.
+/.env
+
+# Go
+*.test
+*.out
+coverage.*

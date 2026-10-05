@@ -1,0 +1,10 @@
+.git
+.gitignore
+bin
+dist
+.run
+.env
+*.test
+coverage.*
+README.md
+ARCHITECTURE.md
